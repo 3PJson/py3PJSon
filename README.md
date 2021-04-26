@@ -1,3 +1,5 @@
+# pyPPJson
+
 **pyPPJson** is a library to use **PPJson** custom protocol, in combination with the C++/Arduino library.
 
 It is a versatile protocol that can fit almost any advanced usage of **Arduino** serial communication, or any other **C++ compiler compatible microcontroller**. It supports **simultaneous** use of config heavy and nicely **maintainable protocol**, with Json flavored key values pairs easily readable by a human, and binary transfer, for **fast and efficient high data throughput** communication, while making both very reliable with strong and **user transparent sanity checks**, to keep ease of use and abstraction layer out of the user's mind, allowing them to focus on the content without worrying about data loss or maintainability.

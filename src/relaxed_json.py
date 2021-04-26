@@ -4,7 +4,7 @@ Created on Thu Apr  8 09:28:02 2021
 
 @author: Timothe
 """
-
+from numba import jit
 import re
 import json
 from parsec import (
@@ -30,6 +30,7 @@ false = lexeme(string('false')).result(False)
 null = lexeme(string('null')).result(None)
 quote = string('"') | string("'")
 
+
 def number():
     return lexeme(
         regex(r'-?(0|[1-9][0-9]*)([.][0-9]+)?([eE][+-]?[0-9]+)?')
@@ -37,8 +38,11 @@ def number():
 
 
 def charseq():
+
+
     def string_part():
         return regex(r'[^"\'\\]+')
+
 
     def string_esc():
         return string('\\') >> (
@@ -54,12 +58,15 @@ def charseq():
         )
     return string_part() | string_esc()
 
+
 class StopGenerator(StopIteration):
+
     def __init__(self, value):
         self.value = value
 
 @lexeme
 @generate
+
 def quoted():
     yield quote
     body = yield many(charseq())
@@ -67,6 +74,7 @@ def quoted():
     raise StopGenerator(''.join(body))
 
 @generate
+
 def array():
     yield lbrack
     elements = yield sepBy(value, comma)
@@ -75,14 +83,15 @@ def array():
 
 
 @generate
+
 def object_pair():
     key = yield regex(r'[a-zA-Z][a-zA-Z0-9]*') | quoted
     yield colon
     val = yield value
     raise StopGenerator((key, val))
 
-
 @generate
+
 def json_object():
     yield lbrace
     pairs = yield sepBy(object_pair, comma)
