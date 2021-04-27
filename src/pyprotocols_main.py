@@ -37,15 +37,34 @@ class PPJsonMessage():
     def __init__(self, content , **kwargs):
 
         self.content = content
+        self.origin = kwargs.get("origin")
         self.send_time = kwargs.get("send_time")
-        self.recieve_time = kwargs.get("recieve_time")
+        self.recieve_time = kwargs.get("recieve_time", [])
         self.aknowledge_state = kwargs.get("aknowledge_state")
         self.aknowledge_time = kwargs.get("aknowledge_time")
 
         self.ready = None
 
+    def setSend_time(self,origin):
+        self.origin = origin
+
+    def setSend_time(self,send_time):
+        self.send_time = send_time
+
+    def appendRecieve_time(self,recieve_time):
+        self.recieve_time.append(recieve_time)
+
+    def setAknowledge_state(self,aknowledge_state):
+        self.aknowledge_state = aknowledge_state
+
+    def setAknowledge_time(self,aknowledge_time):
+        self.aknowledge_time = aknowledge_time
+
     def __str__(self):
-        return "<PPJsonMessage>\n  Type: " + str(type(self.content)) + "\nContent: " + self.content.__str__() + "\nSend Time: " + str(self.send_time) + "\nRecieve Time: " + str(self.recieve_time) + "\nAknowledge Time: " + str(self.aknowledge_time) + "\nAknowledge State: " + str(self.aknowledge_state) + "\nRead State: " + str(self.ready) + "<>"
+        return "<PPJsonMessage>\n\tType: " + str(type(self.content)) + "\n\tContent: " + self.content.__str__() + "\n\tSend Time: " + str(self.send_time) + "\n\tRecieve Time: " + str(self.recieve_time) + "\n\tAknowledge Time: " + str(self.aknowledge_time) + "\n\tAknowledge State: " + str(self.aknowledge_state) + "\n\tRead State: " + str(self.ready)
+
+    def __repr__(self):
+        return self.__str__()
 
 class AknowledgeContent():
     def __init__(self, ak_type, ak_value, ak_origin = None):
@@ -66,7 +85,7 @@ class BinaryContent() :
         self.bytesize = table.getSize(self.id)
         self.signed = table.getSign(self.id)
         if self.vartype is int:
-            self.value = vartype.from_bytes(self.bytearray[1:-2], byteorder='big', signed=self.signed)
+            self.value = self.vartype.from_bytes(self.bytearray[1:-2], byteorder='big', signed=self.signed)
         elif self.vartype is float :
             if self.bytesize == 4 :
                 self.value = struct.unpack('f',self.bytearray[1:-2])[0]
@@ -88,7 +107,7 @@ class BinaryContent() :
     def valid(self):
         return self.calc_crc() == self.get_crc
 
-@jit(nopython=True)
+#@jit(nopython=True)
 def crc16(data : bytearray, length, offset = 0):
     if data is None or offset < 0 or offset > len(data)- 1 and offset+length > len(data):
         return 0
@@ -121,7 +140,7 @@ class MessageBuilder():
         self.available = None # True for content useable , False for content related to answers (answer recieved or not recieved), None for corrupted message.
         self.init = 0
         self.running = True
-
+        self.last_byte_capture_time = 0
         self.buffer = deque()
 
     def clear(self):
@@ -133,9 +152,11 @@ class MessageBuilder():
         self.running = True #used to say that the process of making up a message is over, sucessfull or not, regardless of content
 
     def elapsed(self):
-        return time.perf_counter() - self.last_byte_capture_time if self.last_byte_capture_time != 0 else 0
+        if self.last_byte_capture_time == 0:
+            self.last_byte_capture_time = time.perf_counter()
+        return time.perf_counter() - self.last_byte_capture_time
 
-    def checkByteBuffer(self, max_time = 0.0015, mode = 1):
+    def checkByte(self, max_time = 0.0015, mode = 0):
 
         if mode == 1 :
             if self.port.in_waiting :
@@ -156,29 +177,7 @@ class MessageBuilder():
                 self.last_byte_capture_time = time.perf_counter()
                 self._addContent(item)
 
-            if timeover :
-                print("timeover")
-                self._terminate()
-
-    def checkByte(self, max_time = 0.0015):
-
-        if self.running :
-
-            if not self.init :
-                self.init = 1
-                self.last_byte_capture_time = time.perf_counter()
-
-            timeover = self.elapsed() > max_time
-
-            if not timeover and self.port.in_waiting :
-
-                self.last_byte_capture_time = time.perf_counter()
-                item = self.port.read()
-                #print("TEST : item : ", item, " type :", type(item))
-                #print(len(self.buffer))
-                self._addContent(item)
-
-            if timeover and self.type is not None :
+            if timeover and self.type is not None:
                 print("timeover")
                 self._terminate()
 
@@ -191,11 +190,13 @@ class MessageBuilder():
     def _firstByte(self,byte):
             if byte == bytes([0x23]) : # #HEXINC
                 self.type = 'b'     # TODO : ADD A CHECK FOR LINESIZE DEPENDING ON INDEX SET IN MEMORY OR CONFIGFILE(CONFIGFILE BETTER)
-                self.content = bytesarray()
+                self.content = PPJsonMessage(bytesarray())
+                self.content.appendRecieve_time(time.perf_counter())
                 self.counter = 1
             elif byte == bytes([0x7B]) : # {JSONINC
                 self.type = 'j'
-                self.content = '{'
+                self.content = PPJsonMessage('{')
+                self.content.appendRecieve_time(time.perf_counter())
                 self.counter = 1
             elif byte == bytes([0x40]) : # @AKINC
                 self.type = 'a'
@@ -208,16 +209,16 @@ class MessageBuilder():
                     print('passing')
                     pass
 
-            print("message_rcv_start_at ",end = '')
-            print(time.perf_counter())
+            #print("message_rcv_start_at ",end = '')
+            #print(time.perf_counter())
 
     def _ulteriorBytes(self,byte):
 
         if self.type == 'b' :
             self.counter = self.counter + 1
-            self.content.append(byte)
+            self.content.content.append(byte)
             if self.counter == 2 :
-                self.size = self.typetable.getSize(self.content[0])
+                self.size = self.typetable.getSize(self.content.content[0])
             if self.counter >= self.size + 4: #4 bytes : start byte, identifier, and 2 bytes CRC
                 self._stopBin()
                 return
@@ -228,7 +229,7 @@ class MessageBuilder():
             except :
                 print(byte)
                 return
-            self.content = self.content + byte
+            self.content.content = self.content.content + byte
             if byte == '}' :
                 if self.counter == 1 :
                     self._stopJson()
@@ -266,19 +267,22 @@ class MessageBuilder():
                 return
 
     def _stopBin(self):
-
-        self.content = BinaryContent(self.content,self.typetable)
-        valid = self.content.valid()
-        self.aktime = AknowledgeBin(valid,self.port)
+        self.content.appendRecieve_time(time.perf_counter())
+        self.content.content = BinaryContent(self.content.content,self.typetable)
+        valid = self.content.content.valid()
+        aktime = AknowledgeBin(valid,self.port)
+        self.content.setAknowledge_time(aktime)
         self.available = valid
         self._terminate()
 
     def _stopJson(self):
-
+        self.content.appendRecieve_time(time.perf_counter())
         try :
-            self.content = JsonContent(relaxed.rjson.parse(self.content))
+            self.content.content = JsonContent(relaxed.rjson.parse(self.content.content))
         except :
-            self.aktime = AknowledgeJson(False,self.port)
+            aktime = AknowledgeJson(False,self.port)
+            self.content = None
+            self.content.setAknowledge_time(aktime)
             self.available = False
             self._terminate()
             return
@@ -288,7 +292,8 @@ class MessageBuilder():
             self._terminate()
 
         else :
-            AknowledgeJson(True,self.port) #Have to check if key is expected # TODO
+            aktime = AknowledgeJson(True,self.port) #Have to check if key is expected # TODO
+            self.content.setAknowledge_time(aktime)
             self.available = True
             self._terminate()
 
@@ -302,21 +307,17 @@ class MessageBuilder():
 
     def _terminate(self):
         self.running = False
-        print("terminaging")
 
     def _JsonPrechecker(self):
-
-        try :
-            if self.content.get("Ak") is not None :
-                self.content = AknowledgeContent('j',True)
-                return 1
-            elif self.content.get("Na") is not None :
-                self.content = AknowledgeContent('j',False, self.content.get("Na"))
-                return 1
-            return 0
-
-        except AttributeError :
-            return 0
+        if self.content.content.get("Ak") is not None :
+            self.content = AknowledgeContent('j',True)
+            self.type = 'a'
+            return 1
+        elif self.content.content.get("Na") is not None :
+            self.content = AknowledgeContent('j',False, self.content.content.get("Na"))
+            self.type = 'a'
+            return 1
+        return 0
 
 def AknowledgeBin(valid,port):
     msg = bytesarray([0x40])
@@ -326,12 +327,12 @@ def AknowledgeBin(valid,port):
         msg.append(0x6E)
     port.write(msg)
 
-    if valid :
-        print("Just Sent Binary Aknowledge at : ", end = '')
-    else :
-        print("Just Sent Binary NOT-Aknowledge at :", end = '')
+    #if valid :
+        #print("Just Sent Binary Aknowledge at : ", end = '')
+    #else :
+        #print("Just Sent Binary NOT-Aknowledge at :", end = '')
     aktime = time.perf_counter()
-    print(aktime)
+    #print(aktime)
     return aktime
 
 def AknowledgeJson(valid,port,optional_info = "1"):
@@ -341,12 +342,12 @@ def AknowledgeJson(valid,port,optional_info = "1"):
         msg = "{Na:" + optional_info + "}"
     port.write(msg.encode())
 
-    if valid :
-        print("Just Sent Json Aknowledge at :", end = '')
-    else :
-        print("Just Sent Json NOT-Aknowledge at : ", end = '')
+    #if valid :
+        #print("Just Sent Json Aknowledge at :", end = '')
+    #else :
+        #print("Just Sent Json NOT-Aknowledge at : ", end = '')
     aktime = time.perf_counter()
-    print(aktime)
+    #print(aktime)
     return aktime
 
 class MessageSender():
@@ -388,20 +389,23 @@ class MessageSender():
 
     def connect_aknowledge(self, reference ):
 
-        if reference.content == 'ba' or reference.content == 'ja' :
+        if reference.ak_value == True :
             self.clear()
-            if reference.content == 'ba' :
-                print("RECV AKKKKKBBBB")
+            print("Just Recieved Aknowledge", end = '')
+            if reference.type == 'b' :
+                print(" Binary", end = '')
             else :
-                print("RECV AKKKKKJJJJJ")
+                print(" Json", end = '')
             #self.response_time = time.perf_counter()
-        if reference.content == 'bn' or reference.content == 'jn' :
-            if reference.content == 'bn' :
-                print("RECV NNNAKKKKKBBB")
-            else :
-                print("RECV NNNAKKKKKJJJ : ", reference.naktype)
+            print()
+        else :
             self._post()
-
+            print("Just Recieved NOT-Aknowledge", end = '')
+            if reference.type == 'b' :
+                print(" Binary from ;", end = '')
+            else :
+                print(" Json from :", end = '')
+            print(reference.ak_origin)
 
     def elapsed(self):
 
@@ -508,7 +512,7 @@ class RecievingThread(threading.Thread):
             if not reciever.running :
                 if reciever.available is not None :
                     if reciever.available :
-                        self.result = PPJsonMessage(reciever.content, )
+                        self.result = PPJsonMessage(reciever.content )
                     else :
                         self.result = reciever
 
@@ -550,14 +554,9 @@ class ComThread(QThread):
                 if not reciever.running :
                     if reciever.available is not None :
                         if reciever.available :
-                            # self.data = reciever.content
-                            # self.type = reciever.type
-                            # self.PacketRecieved.emit()
-                            if reciever.type == 'b' :
-                                print(reciever.content.value)
 
-                            else :
-                                print(reciever.content)
+                            print(reciever.content)
+
                         else :
                             sender.connect_aknowledge(reciever.content)
                             #print(sender.transfer_duration())
@@ -654,7 +653,7 @@ if __name__ == '__main__':
         #arr_bytes = bytearray([0x23,0xE6,0x1f,0x2c,0xb5,0x3f,0x9E,0x6A]) # 523023679
 
 
-        types = TypesTable([10,20,230,158],[int,int,float,int],[4,4,4,8],[True,True,None,False])
+        types = TypesTable([10,20,30,230,158],[int,int,int,float,int],[4,4,4,4,8],[True,True,True,None,False])
 
         reciever = MessageBuilder(port_serie)
         reciever.setTable(types)
@@ -664,51 +663,47 @@ if __name__ == '__main__':
         message_queue = deque()
 
         results = []
-        bresults = []
 
         for _ in range(1) :
 
-            messages = 0
-            bmessages = 0
             #message_queue.append( "{get_vartype:230}".encode() )
+            #message_queue.append( [10, 1000] )
+            #message_queue.append( "{get_varvalue:10}".encode() )
+            #message_queue.append( "{go:9871}".encode() )
+            message_queue.append( "{lock:0}".encode() )
+            #message_queue.append( "{go:0}".encode() )
+            message_queue.append( [10, 0] )
             message_queue.append( [20, 0] )
+
             #message_queue.append( "{lock:0}".encode() )
 
-            sentence = message_queue.pop()
+            sentence = message_queue.popleft()
             sender.send(sentence)
 
             reciever.clear()
 
             while True :
                 sender.poll()
-                reciever.checkByte(0.1)
+                reciever.checkByte()
                 if not reciever.running :
                     if reciever.available is not None :
-                        messages = messages + 1
-                        if reciever.available :
-                            if reciever.type == 'b' :
-                                print("BIN value : ",reciever.content.value)
-                                bmessages = bmessages + 1
-                            else :
-                                print("Other : ",reciever.content)
+                        if isinstance(reciever.content, AknowledgeContent):
+                            sender.connect_aknowledge(reciever.content)
                         else :
-                            sender.connect_aknowledge(reciever)
-                            #print(sender.transfer_duration())
+                            results.append(reciever.content)
                     reciever.clear()
 
                 if not sender.running and len(message_queue):
-                    sentence = message_queue.pop()
+                    sentence = message_queue.popleft()
                     sender.send(sentence)
 
-                if reciever.elapsed() > 1 :
-                    print("exiting")
+                if reciever.elapsed() > 2 :
+                    print("\nexiting\n")
                     break
 
-            results.append(messages)
-            bresults.append(bmessages)
                 #port_serie.write(arr_bytes)#0x230A 0xef7bb5ef 0x1104
 
-
+    print(results)
     # threads = MyThread()
     # threads.start()
 
