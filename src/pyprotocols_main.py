@@ -517,12 +517,6 @@ class RecievingThread(threading.Thread):
                         self.result = reciever
 
 
-
-
-
-
-
-
 from PyQt5.QtCore import QThread, pyqtSignal
 
 class ComThread(QThread):
@@ -575,9 +569,7 @@ class ComThread(QThread):
         self.blockSignals(True)
         return self.data
 
-import copy
-
-
+# import copy
 
 # def ComsWrapper(port = 'COM11', queue, typestable ):
 
